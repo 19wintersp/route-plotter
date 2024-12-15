@@ -87,8 +87,13 @@ public:
 };
 
 class Screen : public EuroScope::CRadarScreen {
+private:
+	size_t i;
+
 public:
-	void OnAsrContentToBeClosed(void) override {}
+	Screen(size_t _i) : i(_i) {}
+
+	void OnAsrContentToBeClosed(void) override;
 	void OnRefresh(HDC, int) override;
 };
 
@@ -98,6 +103,7 @@ class Plugin : public EuroScope::CPlugIn {
 private:
 	std::unordered_map<std::string, Route> routes;
 	std::unordered_map<std::string, std::unique_ptr<Source>> sources;
+	std::vector<Screen *> screens;
 	int name_counter = 0;
 
 public:
@@ -153,9 +159,15 @@ void __declspec(dllexport) EuroScopePlugInInit(EuroScope::CPlugIn **ptr) {
 
 void __declspec(dllexport) EuroScopePlugInExit(void) {
 	delete plugin;
+	plugin = nullptr;
 }
 
 
+
+void Screen::OnAsrContentToBeClosed() {
+	if (plugin) plugin->screens[i] = nullptr;
+	delete this;
+}
 
 const double HOLD_RADIUS = 2.0;
 const double STROKE_WIDTH = 1.0;
@@ -379,6 +391,9 @@ bool Plugin::OnCompileCommand(const char *command) {
 			routes.clear();
 		}
 
+		for (auto screen : screens)
+			if (screen) screen->RefreshMapContent();
+
 		return true;
 	}
 
@@ -403,7 +418,13 @@ bool Plugin::OnCompileCommand(const char *command) {
 		command + ofs,
 		route, name, error
 	)) {
-		if (route.size() > 0) routes[name] = route;
+		if (route.size() > 0) {
+			routes[name] = route;
+
+			for (auto screen : screens)
+				if (screen) screen->RefreshMapContent();
+		}
+
 		return true;
 	} else {
 		display_message("Error", error.c_str(), true);
@@ -412,7 +433,12 @@ bool Plugin::OnCompileCommand(const char *command) {
 }
 
 Screen *Plugin::OnRadarScreenCreated(const char *, bool, bool, bool geo, bool) {
-	return geo ? new Screen : nullptr; // leak
+	if (!geo) return nullptr;
+
+	auto *screen = new Screen(screens.size());
+	screens.push_back(screen);
+
+	return screen;
 }
 
 void Plugin::display_message(const char *from, const char *msg, bool urgent) {
