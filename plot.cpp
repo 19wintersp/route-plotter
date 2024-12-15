@@ -1,3 +1,10 @@
+#include <cmath>
+
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include <windows.h>
 
 #include <EuroScopePlugIn.hpp>
@@ -13,7 +20,37 @@
 
 namespace EuroScope = EuroScopePlugIn;
 
+struct Hold {
+	double length, course;
+	bool left_turns;
+
+	Hold(double len, double crs, bool lh) : length(len), course(crs), left_turns(lh) {}
+};
+
+struct Node {
+	double lat, lon;
+	bool highlight;
+	std::wstring label;
+	std::optional<Hold> hold;
+
+	Node() = default;
+	Node(double _lat, double _lon) : lat(_lat), lon(_lon) {}
+
+	static Node Discontinuity() {
+		return Node(NAN, NAN);
+	}
+
+	bool IsDiscontinuity() const {
+		return std::isnan(lat) || std::isnan(lon);
+	}
+};
+
+using Route = std::vector<Node>;
+
 class Plugin : public EuroScope::CPlugIn {
+private:
+	std::unordered_map<std::string, Route> routes;
+
 public:
 	Plugin(void);
 };
