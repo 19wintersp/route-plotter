@@ -1,5 +1,6 @@
 #include <cmath>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -47,9 +48,33 @@ struct Node {
 
 using Route = std::vector<Node>;
 
+class Source {
+public:
+	virtual const char *HelpArguments() const {
+		return "";
+	}
+
+	virtual const char *HelpDescription() const {
+		return "null source";
+	}
+
+	virtual bool Parse(
+		std::vector<std::string>::iterator args_it,
+		std::vector<std::string>::iterator args_end,
+		const char *args_src,
+		Route &route,
+		std::string &name,
+		std::string &error
+	) const {
+		error = std::string("not implemented");
+		return false;
+	}
+};
+
 class Plugin : public EuroScope::CPlugIn {
 private:
 	std::unordered_map<std::string, Route> routes;
+	std::unordered_map<std::string, std::unique_ptr<Source>> sources;
 
 public:
 	Plugin(void);
