@@ -45,7 +45,7 @@ struct Hold {
 
 struct Node {
 	double lat, lon;
-	bool highlight;
+	bool highlight = false;
 	std::wstring label;
 	std::optional<Hold> hold;
 
