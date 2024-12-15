@@ -19,7 +19,7 @@ SRCS = $(NAME).cpp
 OBJS = $(patsubst %.cpp,bin/%.obj,$(SRCS))
 
 bin/$(NAME).dll: $(OBJS)
-	$(XLD) /dll /bin:$@ $(LDFLAGS) $(EXTLIBS) $(LIBS) $^
+	$(XLD) /dll /out:$@ $(LDFLAGS) $(EXTLIBS) $(LIBS) $^
 
 bin/%.obj: %.cpp
 	$(XCC) $(CCFLAGS) /c /Fo$@ $<
