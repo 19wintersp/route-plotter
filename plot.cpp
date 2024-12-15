@@ -159,6 +159,7 @@ void __declspec(dllexport) EuroScopePlugInExit(void) {
 
 const double HOLD_RADIUS = 2.0;
 const double STROKE_WIDTH = 1.0;
+const double LABEL_INTERVAL = 0.25;
 const int FONT_SIZE = 12;
 
 const double DEG_LAT_PER_NM = 60.007;
@@ -188,7 +189,15 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 	EuroScope::CPosition position1, position2;
 	POINT point1, point2;
 
-	for (const auto &[_, route] : plugin->routes) {
+	struct Label {
+		std::wstring content;
+		double x, y, angle;
+	};
+
+	double dist = 0.0, inter = LABEL_INTERVAL * (double) (rect.bottom - rect.top);
+	std::vector<Label> labels;
+
+	for (const auto &[name, route] : plugin->routes) {
 		size_t n = route.size() - 1;
 		for (size_t i = 0; i <= n; i++) {
 			if (route[i].IsDiscontinuity()) continue;
@@ -248,6 +257,18 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 
 			if (i < 1 || route[i - 1].IsDiscontinuity()) continue;
 
+			double length = std::hypot(point2.x - point1.x, point2.y - point1.y);
+			for (double target = inter; target < dist + length; target += inter) {
+				double t = (target - dist) / length;
+				labels.push_back({
+					std::wstring(name.begin(), name.end()),
+					(1.0 - t) * point1.x + t * point2.x,
+					(1.0 - t) * point1.y + t * point2.y,
+					std::atan((double) (point1.y - point2.y) / (double) (point2.x - point1.x))
+				});
+			}
+			dist = std::fmod(dist + length, inter);
+
 			auto line_brush = LinearGradientBrush(
 				Point(point1.x, point1.y), Point(point2.x, point2.y),
 				colour((double) (i - 1) / (double) n), colour((double) i / (double) n)
@@ -279,6 +300,19 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 				ctx->DrawString(route[i].label.c_str(), -1, &font, point_f, &brush);
 			}
 		}
+	}
+
+	brush.SetColor(Color(0xdd, 0xdd, 0xdd));
+
+	for (const auto &label : labels) {
+		ctx->TranslateTransform(label.x, label.y);
+		ctx->RotateTransform(-label.angle * DEG_PER_RAD);
+		ctx->TranslateTransform(-label.x, -label.y);
+
+		PointF centre(label.x, label.y);
+		ctx->DrawString(label.content.c_str(), -1, &font, centre, &brush);
+
+		ctx->ResetTransform();
 	}
 }
 
