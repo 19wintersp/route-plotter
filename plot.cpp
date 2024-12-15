@@ -319,6 +319,7 @@ bool Plugin::OnCompileCommand(const char *command) {
 			);
 		}
 
+		display_command("[NAME] <ROUTE>", "Shortcut for \".plot route [NAME] <ROUTE>\"", width);
 		display_message("", "See <" PLUGIN_WEBSITE "> for more information.");
 
 		return true;
@@ -337,29 +338,32 @@ bool Plugin::OnCompileCommand(const char *command) {
 	}
 
 	auto source = sources.find(parts[1]);
-	if (source != sources.cend()) {
-		std::string name = std::to_string(++name_counter), error;
-		Route route;
+	int offset = 2;
 
-		std::string_view sv(command);
-		size_t ofs = 0;
-		for (int i = 0; i < 2; i++)
-			ofs = sv.find_first_not_of(' ', sv.find_first_of(' ', ofs));
-
-		if (source->second->Parse(
-			parts.begin() + 2, parts.end(),
-			command + ofs,
-			route, name, error
-		)) {
-			if (route.size() > 0) routes[name] = route;
-			return true;
-		} else {
-			display_message("Error", error.c_str(), true);
-			return false;
-		}
+	if (source == sources.cend()) {
+		source = sources.find("route");
+		offset = 1;
 	}
 
-	return false;
+	std::string name = std::to_string(++name_counter), error;
+	Route route;
+
+	std::string_view sv(command);
+	size_t ofs = 0;
+	for (int i = 0; i < offset; i++)
+		ofs = sv.find_first_not_of(' ', sv.find_first_of(' ', ofs));
+
+	if (source->second->Parse(
+		parts.begin() + offset, parts.end(),
+		command + ofs,
+		route, name, error
+	)) {
+		if (route.size() > 0) routes[name] = route;
+		return true;
+	} else {
+		display_message("Error", error.c_str(), true);
+		return false;
+	}
 }
 
 Screen *Plugin::OnRadarScreenCreated(const char *, bool, bool, bool geo, bool) {
