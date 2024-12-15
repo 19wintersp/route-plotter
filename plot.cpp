@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <iterator>
+#include <numbers>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -13,6 +15,9 @@
 
 #include <windows.h>
 #undef max //
+
+#include <gdiplus.h>
+#include <gdiplusgraphics.h>
 
 #include <EuroScopePlugIn.hpp>
 
@@ -79,7 +84,15 @@ public:
 	}
 };
 
+class Screen : public EuroScope::CRadarScreen {
+public:
+	void OnAsrContentToBeClosed(void) override {}
+	void OnRefresh(HDC, int) override;
+};
+
 class Plugin : public EuroScope::CPlugIn {
+	friend class Screen;
+
 private:
 	std::unordered_map<std::string, Route> routes;
 	std::unordered_map<std::string, std::unique_ptr<Source>> sources;
@@ -89,6 +102,7 @@ public:
 	Plugin(void);
 
 	bool OnCompileCommand(const char *) override;
+	Screen *OnRadarScreenCreated(const char *, bool, bool, bool, bool) override;
 
 private:
 	void display_message(const char *from, const char *msg, bool urgent = false);
@@ -121,6 +135,133 @@ void __declspec(dllexport) EuroScopePlugInInit(EuroScope::CPlugIn **ptr) {
 
 void __declspec(dllexport) EuroScopePlugInExit(void) {
 	delete plugin;
+}
+
+
+
+const double HOLD_RADIUS = 2.0;
+const double STROKE_WIDTH = 1.0;
+const int FONT_SIZE = 12;
+
+const double DEG_LAT_PER_NM = 60.007;
+const double DEG_PER_RAD = 180.0 / std::numbers::pi;
+
+static Gdiplus::Color colour(double t) {
+	int x = 255.0 * (1.0 - std::abs(1.0 - t * 2.0));
+	return Gdiplus::Color(t < 0.5 ? 255 : x, 0, t > 0.5 ? 255 : x);
+}
+
+void Screen::OnRefresh(HDC hdc, int phase) {
+	using namespace Gdiplus;
+
+	if (phase != EuroScope::REFRESH_PHASE_BACK_BITMAP) return;
+
+	Graphics *ctx = Graphics::FromHDC(hdc);
+
+	FontFamily font_family(L"EuroScope");
+	Font font(&font_family, FONT_SIZE, FontStyleRegular, UnitPixel);
+
+	RECT rect = GetRadarArea();
+	Rect clip(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+	ctx->SetClip(clip);
+
+	Pen pen(colour(0.0), STROKE_WIDTH), brush_pen(colour(0.0), STROKE_WIDTH);
+
+	EuroScope::CPosition position1, position2;
+	POINT point1, point2;
+
+	for (const auto &[_, route] : plugin->routes) {
+		size_t n = route.size() - 1;
+		for (size_t i = 0; i <= n; i++) {
+			if (route[i].IsDiscontinuity()) continue;
+
+			position1 = std::move(position2);
+			point1 = std::move(point2);
+
+			position2.m_Latitude = route[i].lat;
+			position2.m_Longitude = route[i].lon;
+
+			point2 = ConvertCoordFromPositionToPixel(position2);
+
+			if (auto hold = route[i].hold) {
+				// approximation
+				double crs_rad = hold->course / DEG_PER_RAD;
+				double lat_rad = route[i].lat / DEG_PER_RAD;
+				double len_deg = hold->length / DEG_LAT_PER_NM;
+				position2.m_Latitude -= len_deg * std::cos(crs_rad);
+				position2.m_Longitude -= len_deg * std::sin(crs_rad) / std::cos(lat_rad);
+
+				POINT point_ie = point2, point_is = ConvertCoordFromPositionToPixel(position2);
+
+				long leg_x = point_is.x - point_ie.x, leg_y = point_is.y - point_ie.y;
+				double mul = HOLD_RADIUS / hold->length;
+				long rad_x = (double) leg_y * mul, rad_y = (double) -leg_x * mul;
+
+				long d = std::round(2.0 * std::sqrt(rad_x * rad_x + rad_y * rad_y)), r = d / 2;
+
+				double ang = std::atan((double) rad_y / (double) rad_x) * DEG_PER_RAD;
+				if (
+					(rad_x <= rad_y && rad_x <= -rad_y) ||
+					(rad_x < rad_y && rad_x > -rad_y && ang < 0) ||
+					(rad_x > rad_y && rad_x < -rad_y && ang > 0)
+				) ang += 180;
+
+				if (hold->left_turns) {
+					rad_x *= -1; rad_y *= -1;
+				}
+
+				POINT point_oc = point_ie, point_ic = point_is;
+
+				point_oc.x += rad_x; point_oc.y += rad_y;
+				point_ic.x += rad_x; point_ic.y += rad_y;
+
+				POINT point_os = point_oc, point_oe = point_ic;
+
+				point_os.x += rad_x; point_os.y += rad_y;
+				point_oe.x += rad_x; point_oe.y += rad_y;
+
+				pen.SetColor(colour((double) i / (double) n));
+
+				ctx->DrawArc(&pen, point_oc.x - r, point_oc.y - r, d, d, ang, -180);
+				ctx->DrawLine(&pen, point_os.x, point_os.y, point_oe.x, point_oe.y);
+				ctx->DrawArc(&pen, point_ic.x - r, point_ic.y - r, d, d, ang, 180);
+				ctx->DrawLine(&pen, point_is.x, point_is.y, point_ie.x, point_ie.y);
+			}
+
+			if (i < 1 || route[i - 1].IsDiscontinuity()) continue;
+
+			auto line_brush = LinearGradientBrush(
+				Point(point1.x, point1.y), Point(point2.x, point2.y),
+				colour((double) (i - 1) / (double) n), colour((double) i / (double) n)
+			);
+			brush_pen.SetBrush(&line_brush);
+
+			ctx->DrawLine(&brush_pen, point1.x, point1.y, point2.x, point2.y);
+		}
+	}
+
+	SolidBrush brush(Color(0xff, 0xff, 0xff));
+	pen.SetColor(Color(0xff, 0xff, 0xff));
+
+	for (const auto &[_, route] : plugin->routes) {
+		size_t n = route.size() - 1;
+		for (size_t i = 0; i <= n; i++) {
+			if (route[i].IsDiscontinuity()) continue;
+
+			position1.m_Latitude = route[i].lat;
+			position1.m_Longitude = route[i].lon;
+
+			point1 = ConvertCoordFromPositionToPixel(position1);
+
+			int r = route[i].highlight ? 4 : 1;
+			ctx->DrawEllipse(&pen, point1.x - r, point1.y - r, r * 2, r * 2);
+
+			if (route[i].label.size() > 0) {
+				PointF point_f(point1.x + r + 4, point1.y - (FONT_SIZE / 2));
+				ctx->DrawString(route[i].label.c_str(), -1, &font, point_f, &brush);
+			}
+		}
+	}
 }
 
 
@@ -191,7 +332,7 @@ bool Plugin::OnCompileCommand(const char *command) {
 			command + ofs,
 			route, name, error
 		)) {
-			routes[name] = route;
+			if (route.size() > 0) routes[name] = route;
 			return true;
 		} else {
 			display_message("Error", error.c_str(), true);
@@ -200,6 +341,10 @@ bool Plugin::OnCompileCommand(const char *command) {
 	}
 
 	return false;
+}
+
+Screen *Plugin::OnRadarScreenCreated(const char *, bool, bool, bool geo, bool) {
+	return geo ? new Screen : nullptr; // leak
 }
 
 void Plugin::display_message(const char *from, const char *msg, bool urgent) {
