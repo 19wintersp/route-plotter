@@ -1,4 +1,6 @@
+#include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 #include <algorithm>
@@ -117,6 +119,22 @@ public:
 
 	const char *HelpDescription() const override {
 		return "Plot a string of coordinates, encoded in the legacy format";
+	}
+
+	bool Parse(
+		std::vector<std::string>::iterator, std::vector<std::string>::iterator,
+		const char *, Route &, std::string &, std::string &
+	) const override;
+};
+
+class RouteSource : public virtual Source {
+public:
+	const char *HelpArguments() const override {
+		return "<ROUTE>";
+	}
+
+	const char *HelpDescription() const override {
+		return "Plot a flight plan route";
 	}
 
 	bool Parse(
@@ -273,6 +291,7 @@ Plugin::Plugin(void) :
 	)
 {
 	sources["coords"] = std::make_unique<CoordsSource>();
+	sources["route"] = std::make_unique<RouteSource>();
 }
 
 bool Plugin::OnCompileCommand(const char *command) {
@@ -466,6 +485,291 @@ bool CoordsSource::Parse(
 
 		item.label.clear();
 		route.push_back(item);
+	}
+
+	return true;
+}
+
+
+
+bool RouteSource::Parse(
+	std::vector<std::string>::iterator start,
+	std::vector<std::string>::iterator end,
+	const char *,
+	Route &route,
+	std::string &name,
+	std::string &error
+) const {
+	struct Point {
+		std::string_view name, runway;
+		struct {
+			int len, crs;
+			bool lh;
+		} hold;
+	};
+
+	struct Position {
+		double lat, lon;
+
+		inline bool operator==(const Position &) const = default;
+	};
+
+	if ((end - start) % 2 == 0) name = *(start++);
+
+	std::vector<Point> points;
+	std::vector<std::string_view> ats_routes;
+
+	std::unordered_map<std::string_view, Position> point_positions;
+	std::unordered_map<std::string_view, std::vector<Position>> ats_route_positions;
+
+	auto it = start;
+	for (bool p = true; it != end; p ^= 1, it++) {
+		if (p) {
+			Point point;
+			point.hold.len = 0;
+
+			std::size_t sep = it->find('/');
+			if (sep == std::string::npos) {
+				point.name = *it;
+			} else {
+				point.name = std::string_view(it->data(), sep);
+
+				sep++;
+				if (it->size() - sep > 3) {
+					try {
+						int crs = std::stoi(std::string(*it, sep, 3));
+						sep += 3;
+
+						char dir = std::toupper((*it)[sep++]);
+						if (dir != 'R' && dir != 'L') {
+							error = std::string("invalid hold direction");
+							return false;
+						}
+
+						int len = it->size() > sep ? std::stoi(std::string(*it, sep)) : 4;
+
+						point.hold.crs = crs;
+						point.hold.len = len;
+						point.hold.lh = dir == 'L';
+					} catch (const std::invalid_argument &_) {
+						error = std::string("invalid integer");
+						return false;
+					}
+				} else if (it == start || end - it == 1) {
+					point.runway = std::string_view(it->data() + sep, it->size() - sep);
+				} else {
+					error = std::string("runway in nonterminal location");
+					return false;
+				}
+			}
+
+			Position position = { 0.0, 0.0 };
+
+			if ('0' <= point.name[0] && point.name[0] <= '9') {
+				const char *src = point.name.data();
+				char *lat_sign, *lon_sign;
+
+				auto int_lat = std::strtoul(src, &lat_sign, 10);
+				if (!*lat_sign || (*lat_sign != 'N' && *lat_sign != 'S')) goto ll_fail;
+				auto int_lon = std::strtoul(lat_sign + 1, &lon_sign, 10);
+				if (!*lon_sign || (*lon_sign != 'E' && *lon_sign != 'W')) goto ll_fail;
+
+				for (int i = (lat_sign - src) / 2; i > 1; i--) {
+					position.lat += (double) (int_lat % 100);
+					position.lat /= 60.0;
+					int_lat /= 100;
+				}
+
+				for (int i = (lon_sign - lat_sign - 1) / 2; i > 1; i--) {
+					position.lon += (double) (int_lon % 100);
+					position.lon /= 60.0;
+					int_lon /= 100;
+				}
+
+				position.lat += (double) int_lat;
+				position.lon += (double) int_lon;
+
+				position.lat *= *lat_sign == 'S' ? -1.0 : 1.0;
+				position.lon *= *lon_sign == 'W' ? -1.0 : 1.0;
+
+			ll_fail: {}
+			} else {
+				position.lat = NAN;
+			}
+
+			point_positions.emplace(point.name, position);
+			points.push_back(std::move(point));
+		} else if (*it == "DCT") {
+			ats_routes.push_back({});
+		} else {
+			ats_route_positions.emplace(*it, std::vector<Position>());
+			ats_routes.push_back(*it);
+		}
+	}
+
+	std::vector<Position> sid, star;
+	Position adep, ades;
+
+	EuroScope::CPosition pos;
+
+	for (
+		auto el = plugin->SectorFileElementSelectFirst(EuroScope::SECTOR_ELEMENT_ALL);
+		el.IsValid();
+		el = plugin->SectorFileElementSelectNext(el, EuroScope::SECTOR_ELEMENT_ALL)
+	) {
+		switch (el.GetElementType()) {
+			case EuroScope::SECTOR_ELEMENT_VOR:
+			case EuroScope::SECTOR_ELEMENT_NDB:
+			case EuroScope::SECTOR_ELEMENT_FIX:
+			case EuroScope::SECTOR_ELEMENT_AIRPORT: {
+				auto it = point_positions.find(el.GetName());
+				if (it != point_positions.end())
+					if (el.GetPosition(&pos, 0))
+						std::get<1>(*it) = { pos.m_Latitude, pos.m_Longitude };
+
+				break;
+			}
+
+			case EuroScope::SECTOR_ELEMENT_RUNWAY:
+				for (int i = 0; i <= 1; i++) {
+					const Point &point = i ? points.front() : points.back();
+					Position &adp = i ? adep : ades;
+
+					if (point.runway.data() && !point.name.compare(0, 4, el.GetAirportName(), 4))
+						for (int j = 0; j <= 1; j++)
+							if (!point.runway.compare(el.GetRunwayName(j)))
+								if (el.GetPosition(&pos, j))
+									adp = { pos.m_Latitude, pos.m_Longitude };
+				}
+
+				break;
+
+			// this will break if an aerodrome has an identically-named SID & STAR lol
+			case EuroScope::SECTOR_ELEMENT_SIDS_STARS:
+				for (int i = 0; i <= 1; i++) {
+					const Point &point = i ? points.front() : points.back();
+					const std::string_view &ats = i ? ats_routes.front() : ats_routes.back();
+					std::vector<Position> &out = i ? sid : star;
+
+					if (
+						point.runway.data() &&
+						!point.name.compare(el.GetAirportName()) &&
+						!point.runway.compare(el.GetRunwayName(0)) &&
+						!ats.compare(el.GetName())
+					)
+						for (int j = 0; el.GetPosition(&pos, j); j++)
+							out.push_back({ pos.m_Latitude, pos.m_Longitude });
+				}
+
+				break;
+
+			case EuroScope::SECTOR_ELEMENT_LOW_AIRWAY:
+			case EuroScope::SECTOR_ELEMENT_HIGH_AIRWAY: {
+				auto it = ats_route_positions.find(el.GetName());
+				if (it != ats_route_positions.end())
+					for (int i = 0; el.GetPosition(&pos, i); i++) {
+						auto &vec = std::get<1>(*it);
+						Position npos = { pos.m_Latitude, pos.m_Longitude };
+						if (vec.empty() || npos != vec.back()) vec.push_back(npos);
+					}
+
+				break;
+			}
+		}
+	}
+
+	if (!star.empty()) star.push_back(ades);
+
+	Position seg_end, seg_start;
+
+	for (int i = 0; i < points.size(); i++) {
+		if (i == 0 && points.front().runway.data()) {
+			seg_end = adep;
+		} else if (i == points.size() - 1 && points.back().runway.data()) {
+			seg_end = ades;
+		} else {
+			auto it = point_positions.find(points[i].name);
+			if (it == point_positions.end() || std::isnan(it->second.lat)) {
+				error = std::format("could not find point '{}'", points[i].name);
+				return false;
+			} else {
+				seg_end = std::get<1>(*it);
+			}
+		}
+
+		if (i > 0 && ats_routes[i - 1].data()) {
+			const std::vector<Position> *ats;
+
+			if (i == 1 && points.front().runway.data()) {
+				ats = &sid;
+			} else if (i == points.size() - 1 && points.back().runway.data()) {
+				ats = &star;
+			} else {
+				auto it = ats_route_positions.find(ats_routes[i - 1]);
+				if (it == ats_route_positions.end()) {
+					error = std::format("could not find airway '{}'", ats_routes[i - 1]);
+					return false;
+				} else {
+					ats = &std::get<1>(*it);
+				}
+			}
+
+			auto from = ats->cbegin(), to = ats->cend();
+
+			if (ats != &sid) {
+				if ((from = std::find(ats->cbegin(), ats->cend(), seg_start)) == ats->cend()) {
+					error = std::format(
+						"discontinuity ({} to {})",
+						points[i - 1].name,
+						ats_routes[i - 1]
+					);
+
+					return false;
+				}
+			}
+
+			if (ats != &star) {
+				if ((to = std::find(ats->cbegin(), ats->cend(), seg_end)) == ats->cend()) {
+					error = std::format(
+						"discontinuity ({} to {})",
+						ats_routes[i - 1],
+						points[i].name
+					);
+
+					return false;
+				}
+			}
+
+			if (from < to)
+				for (auto it = (ats == &sid || ats == &star) ? from : ++from; it < to; it++)
+					route.push_back({ it->lat, it->lon });
+			else
+				for (auto it = --from; it > to; it--)
+					route.push_back({ it->lat, it->lon });
+		}
+
+		Node point(seg_end.lat, seg_end.lon);
+
+		if (points[i].hold.len) {
+			point.hold = Hold(
+				points[i].hold.len,
+				points[i].hold.crs,
+				points[i].hold.lh
+			);
+		} else {
+			point.hold = std::nullopt;
+		}
+
+		if (points[i].name[0] < '0' || points[i].name[0] > '9') {
+			std::wstring label;
+			for (int j = 0; j < points[i].name.size(); j++)
+				label.push_back((std::wstring::value_type) points[i].name[j]);
+			point.label = label;
+		}
+
+		route.push_back(point);
+
+		seg_start = seg_end;
 	}
 
 	return true;
