@@ -279,8 +279,24 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 		}
 	}
 
-	SolidBrush brush(Color(0xff, 0xff, 0xff));
+	SolidBrush brush(Color(0xdd, 0xdd, 0xdd));
+
+	for (const auto &label : labels) {
+		ctx->TranslateTransform(label.x, label.y);
+		ctx->RotateTransform(-label.angle * DEG_PER_RAD);
+		ctx->TranslateTransform(-label.x, -label.y);
+
+		PointF centre(label.x, label.y);
+		ctx->DrawString(label.content.c_str(), -1, &font, centre, &brush);
+
+		ctx->ResetTransform();
+	}
+
+	brush.SetColor(Color(0xff, 0xff, 0xff));
 	pen.SetColor(Color(0xff, 0xff, 0xff));
+
+	std::vector<RectF> label_rects;
+	RectF label_rect;
 
 	for (const auto &[_, route] : plugin->routes) {
 		size_t n = route.size() - 1;
@@ -296,23 +312,18 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 			ctx->DrawEllipse(&pen, point1.x - r, point1.y - r, r * 2, r * 2);
 
 			if (route[i].label.size() > 0) {
-				PointF point_f(point1.x + r + 4, point1.y - (FONT_SIZE / 2));
-				ctx->DrawString(route[i].label.c_str(), -1, &font, point_f, &brush);
+				PointF origin(point1.x + r + 4, point1.y - (FONT_SIZE / 2));
+
+				ctx->MeasureString(route[i].label.c_str(), -1, &font, origin, &label_rect);
+				if (std::none_of(
+					label_rects.cbegin(), label_rects.cend(),
+					[label_rect](auto &rect2) { return rect2.IntersectsWith(label_rect); }
+				)) {
+					ctx->DrawString(route[i].label.c_str(), -1, &font, origin, &brush);
+					label_rects.push_back(label_rect);
+				}
 			}
 		}
-	}
-
-	brush.SetColor(Color(0xdd, 0xdd, 0xdd));
-
-	for (const auto &label : labels) {
-		ctx->TranslateTransform(label.x, label.y);
-		ctx->RotateTransform(-label.angle * DEG_PER_RAD);
-		ctx->TranslateTransform(-label.x, -label.y);
-
-		PointF centre(label.x, label.y);
-		ctx->DrawString(label.content.c_str(), -1, &font, centre, &brush);
-
-		ctx->ResetTransform();
 	}
 }
 
