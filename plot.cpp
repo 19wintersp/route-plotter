@@ -695,10 +695,19 @@ bool RouteSource::Parse(
 		el = plugin->SectorFileElementSelectNext(el, EuroScope::SECTOR_ELEMENT_ALL)
 	) {
 		switch (el.GetElementType()) {
+			case EuroScope::SECTOR_ELEMENT_AIRPORT:
+				for (int i = 0; i <= 1; i++) {
+					const Point &point = i ? points.front() : points.back();
+					Position &adp = i ? adep : ades;
+
+					if (point.runway.empty() && !point.name.compare(el.GetName()))
+						if (el.GetPosition(&pos, 0))
+							adp = { pos.m_Latitude, pos.m_Longitude };
+				}
+
 			case EuroScope::SECTOR_ELEMENT_VOR:
 			case EuroScope::SECTOR_ELEMENT_NDB:
-			case EuroScope::SECTOR_ELEMENT_FIX:
-			case EuroScope::SECTOR_ELEMENT_AIRPORT: {
+			case EuroScope::SECTOR_ELEMENT_FIX: {
 				auto it = point_positions.find(el.GetName());
 				if (it != point_positions.end())
 					if (el.GetPosition(&pos, 0))
@@ -723,15 +732,17 @@ bool RouteSource::Parse(
 
 			// this will break if an aerodrome has an identically-named SID & STAR lol
 			case EuroScope::SECTOR_ELEMENT_SIDS_STARS:
+				if (ats_routes.empty()) break;
+
 				for (int i = 0; i <= 1; i++) {
 					const Point &point = i ? points.front() : points.back();
 					const std::string_view &ats = i ? ats_routes.front() : ats_routes.back();
 					std::vector<Position> &out = i ? sid : star;
 
 					if (
-						point.runway.data() &&
+						out.empty() &&
 						!point.name.compare(el.GetAirportName()) &&
-						!point.runway.compare(el.GetRunwayName(0)) &&
+						(point.runway.empty() || !point.runway.compare(el.GetRunwayName(0))) &&
 						!ats.compare(el.GetName())
 					)
 						for (int j = 0; el.GetPosition(&pos, j); j++)
@@ -760,9 +771,9 @@ bool RouteSource::Parse(
 	Position seg_end, seg_start;
 
 	for (int i = 0; i < points.size(); i++) {
-		if (i == 0 && points.front().runway.data()) {
+		if (i == 0 && !sid.empty()) {
 			seg_end = adep;
-		} else if (i == points.size() - 1 && points.back().runway.data()) {
+		} else if (i == points.size() - 1 && !star.empty()) {
 			seg_end = ades;
 		} else {
 			auto it = point_positions.find(points[i].name);
@@ -777,9 +788,9 @@ bool RouteSource::Parse(
 		if (i > 0 && ats_routes[i - 1].data()) {
 			const std::vector<Position> *ats;
 
-			if (i == 1 && points.front().runway.data()) {
+			if (i == 1 && !sid.empty()) {
 				ats = &sid;
-			} else if (i == points.size() - 1 && points.back().runway.data()) {
+			} else if (i == points.size() - 1 && !star.empty()) {
 				ats = &star;
 			} else {
 				auto it = ats_route_positions.find(ats_routes[i - 1]);
