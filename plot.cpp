@@ -269,6 +269,16 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 
 			if (i < 1 || route[i - 1].IsDiscontinuity()) continue;
 
+			auto line_brush = LinearGradientBrush(
+				Point(point1.x, point1.y), Point(point2.x, point2.y),
+				colour((double) (i - 1) / (double) n), colour((double) i / (double) n)
+			);
+			brush_pen.SetBrush(&line_brush);
+
+			ctx->DrawLine(&brush_pen, point1.x, point1.y, point2.x, point2.y);
+
+			if (!clip.Contains(point2.x, point2.y)) continue;
+
 			double length = std::hypot(point2.x - point1.x, point2.y - point1.y);
 			for (double target = inter; target < dist + length; target += inter) {
 				double t = (target - dist) / length;
@@ -280,14 +290,6 @@ void Screen::OnRefresh(HDC hdc, int phase) {
 				});
 			}
 			dist = std::fmod(dist + length, inter);
-
-			auto line_brush = LinearGradientBrush(
-				Point(point1.x, point1.y), Point(point2.x, point2.y),
-				colour((double) (i - 1) / (double) n), colour((double) i / (double) n)
-			);
-			brush_pen.SetBrush(&line_brush);
-
-			ctx->DrawLine(&brush_pen, point1.x, point1.y, point2.x, point2.y);
 		}
 	}
 
