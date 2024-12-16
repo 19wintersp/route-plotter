@@ -46,18 +46,16 @@ textarea {
 		<main>
 			<h1>Route-plotter companion tool</h1>
 			<p>
-				Convert between StatSim/GeoJSON and the
+				Converts between StatSim/GeoJSON and the
 				<a href="https://github.com/19wintersp/route-plotter">route-plotter</a>
 				"coords" string format.
 			</p>
+			<p>
+				Copy the flight ID from StatSim (in the URL&mdash;not the CID) into the
+				input box and press "Search ID".
+			</p>
 
 			<div>
-				<input id="ss-date" type="date" />
-				<span></span>
-
-				<input id="ss-in-cid" type="text" placeholder="1704684" />
-				<button id="ss-go-cid">Search CID</button>
-
 				<input id="ss-in-fid" type="text" placeholder="18629392" />
 				<button id="ss-go-fid">Search ID</button>
 
@@ -70,34 +68,28 @@ textarea {
 		</main>
 
 		<script>
-const date = document.getElementById("ss-date");
-date.value = (new Date()).toISOString().split("T")[0];
-
 const resCoords = document.getElementById("rs-coords");
 const resJson = document.getElementById("rs-geojson");
 
 const decomp = (ord) =>
 	[-1, 0, 1, 2].map((i) => Math.floor(Math.pow(60, i) * Math.abs(ord)) % 60);
 
-const go = async (path) => {
-	const res = fetch(`https://statsim.net/flights${path}&json=true`)
-		.then((res) => res.json())
+const go = async (id) => {
+	const res = fetch(`https://statsim.net/flights/flight/?flightid=${id}&json=true`)
+		.then((res) => res.ok ? res.json() : null)
 		.catch((err) => resCoords.value = resJson.value = err);
 
 	resCoords.value = resJson.value = "Waiting for StatSim...";
 
 	const json = await res;
-	if (!json.points && json.length == 0) {
+	if (!json) {
 		resCoords.value = resJson.value = "No results";
 		return;
 	}
 
-	const points = json.points ??
-		await fetch(`https://statsim.net/flights/flight/?flightid=${json[0].id}`)
-			.then((res) => res.json())
-			.then((json) => json.points);
+	const { flight, points } = json;
 
-	resCoords.value = points
+	resCoords.value = `.plot coords ${flight.callsign} ` + points
 		.flatMap(({ latitude, longitude }) => {
 			const [ya, ...yr] = decomp(latitude);
 			const [xa, ...xr] = decomp(longitude);
@@ -118,16 +110,8 @@ const go = async (path) => {
 };
 
 document
-	.getElementById("ss-go-cid")
-	.addEventListener("click", () =>
-		go(`/vatsimid/?vatsimid=${document.getElementById("ss-in-cid").value}&period=custom&from=${date.value}&to=${date.value}`)
-	);
-
-document
 	.getElementById("ss-go-fid")
-	.addEventListener("click", () =>
-		go(`/flight/?flightid=${document.getElementById("ss-in-fid").value}`)
-	);
+	.addEventListener("click", () => go(document.getElementById("ss-in-fid").value));
 
 document
 	.getElementById("rs-coords-copy")
