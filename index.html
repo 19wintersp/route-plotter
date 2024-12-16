@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+	<!-- this is terrible -->
+
+	<head>
+		<meta charset="utf-8" />
+
+		<title>Route-plotter companion tool</title>
+
+		<style>
+body {
+	font-family: sans-serif;
+}
+
+h1, p {
+	grid-column: 1 / span 2;
+	text-align: center;
+	width: auto;
+}
+
+h1 {
+	font-size: 1.5rem;
+	margin: 0px;
+}
+
+main {
+	margin: 100px auto;
+	max-width: 400px;
+}
+
+div {
+	display: grid;
+	grid-template-columns: auto max-content;
+	gap: 8px;
+	align-items: start;
+}
+
+textarea {
+	resize: none;
+	height: 20rem;
+}
+		</style>
+	</head>
+
+	<body>
+		<main>
+			<h1>Route-plotter companion tool</h1>
+			<p>
+				Convert between StatSim/GeoJSON and the
+				<a href="https://github.com/19wintersp/route-plotter">route-plotter</a>
+				"coords" string format.
+			</p>
+
+			<div>
+				<input id="ss-date" type="date" />
+				<span></span>
+
+				<input id="ss-in-cid" type="text" placeholder="1704684" />
+				<button id="ss-go-cid">Search CID</button>
+
+				<input id="ss-in-fid" type="text" placeholder="18629392" />
+				<button id="ss-go-fid">Search ID</button>
+
+				<textarea id="rs-coords" readonly></textarea>
+				<button id="rs-coords-copy">Copy string</button>
+
+				<textarea id="rs-geojson" readonly></textarea>
+				<button id="rs-geojson-copy">Copy GeoJSON</button>
+			</div>
+		</main>
+
+		<script>
+const date = document.getElementById("ss-date");
+date.value = (new Date()).toISOString().split("T")[0];
+
+const resCoords = document.getElementById("rs-coords");
+const resJson = document.getElementById("rs-geojson");
+
+const decomp = (ord) =>
+	[-1, 0, 1, 2].map((i) => Math.floor(Math.pow(60, i) * Math.abs(ord)) % 60);
+
+const go = async (path) => {
+	const res = fetch(`https://statsim.net/flights${path}&json=true`)
+		.then((res) => res.json())
+		.catch((err) => resCoords.value = resJson.value = err);
+
+	resCoords.value = resJson.value = "Waiting for StatSim...";
+
+	const json = await res;
+	if (!json.points && json.length == 0) {
+		resCoords.value = resJson.value = "No results";
+		return;
+	}
+
+	const points = json.points ??
+		await fetch(`https://statsim.net/flights/flight/?flightid=${json[0].id}`)
+			.then((res) => res.json())
+			.then((json) => json.points);
+
+	resCoords.value = points
+		.flatMap(({ latitude, longitude }) => {
+			const [ya, ...yr] = decomp(latitude);
+			const [xa, ...xr] = decomp(longitude);
+			return [
+				(Math.abs(ya) << 2) | (latitude  < 0 ? 0b0010 : 0) |
+				(Math.abs(xa) << 4) | (longitude < 0 ? 0b1000 : 0),
+				...yr, ...xr,
+			];
+		})
+		.map((i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[i])
+		.join("");
+
+	resJson.value = JSON.stringify({
+		type: "LineString",
+		coordinates: points.map(({ latitude, longitude, altitude }) =>
+			[longitude, latitude, altitude * 0.3048]),
+	});
+};
+
+document
+	.getElementById("ss-go-cid")
+	.addEventListener("click", () =>
+		go(`/vatsimid/?vatsimid=${document.getElementById("ss-in-cid").value}&period=custom&from=${date.value}&to=${date.value}`)
+	);
+
+document
+	.getElementById("ss-go-fid")
+	.addEventListener("click", () =>
+		go(`/flight/?flightid=${document.getElementById("ss-in-fid").value}`)
+	);
+
+document
+	.getElementById("rs-coords-copy")
+	.addEventListener("click", () => navigator.clipboard.writeText(resCoords.value));
+
+document
+	.getElementById("rs-geojson-copy")
+	.addEventListener("click", () => navigator.clipboard.writeText(resJson.value));
+		</script>
+	</body>
+</html>
