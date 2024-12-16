@@ -26,7 +26,7 @@
 
 
 #define PLUGIN_NAME    "Route plotter"
-#define PLUGIN_VERSION "0.4.0"
+#define PLUGIN_VERSION "0.4.1"
 #define PLUGIN_AUTHORS "Patrick Winters"
 #define PLUGIN_LICENCE "GNU GPLv3"
 #define PLUGIN_WEBSITE "https://github.com/19wintersp/route-plotter"
