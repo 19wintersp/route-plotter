@@ -28,7 +28,8 @@ main {
 	max-width: 400px;
 }
 
-div {
+div:last-child {
+	margin-top: 8px;
 	display: grid;
 	grid-template-columns: auto max-content;
 	gap: 8px;
@@ -56,6 +57,24 @@ textarea {
 			</p>
 
 			<div>
+				<div>
+					<input id="opt-in-time" type="checkbox" />
+					<label for="opt-in-time">Include times</label>
+					<br />
+
+					<input id="opt-in-alt" type="checkbox" />
+					<label for="opt-in-alt">Include altitudes</label>
+					<br />
+
+					<input id="opt-in-spd" type="checkbox" />
+					<label for="opt-in-spd">Include groud speeds</label>
+					<br />
+
+					<input id="opt-in-hdg" type="checkbox" />
+					<label for="opt-in-hdg">Include headings</label>
+				</div>
+				<span></span>
+
 				<input id="ss-in-fid" type="text" placeholder="18629392" />
 				<button id="ss-go-fid">Search ID</button>
 
@@ -90,16 +109,35 @@ const go = async (id) => {
 	const { flight, points } = json;
 
 	resCoords.value = `.plot coords ${flight.callsign} ` + points
-		.flatMap(({ latitude, longitude }) => {
+		.map(({ latitude, longitude, ...data }) => {
 			const [ya, ...yr] = decomp(latitude);
 			const [xa, ...xr] = decomp(longitude);
-			return [
+			const pos = [
 				(Math.abs(ya) << 2) | (latitude  < 0 ? 0b0010 : 0) |
 				(Math.abs(xa) << 4) | (longitude < 0 ? 0b1000 : 0),
 				...yr, ...xr,
-			];
+			]
+				.map((i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[i])
+				.join("");
+
+			const label = [];
+			if (document.getElementById("opt-in-time").checked) {
+				const date = new Date(data.time * 1000);
+				label.push(
+					date.getHours().toString().padStart(2, "0") +
+					date.getMinutes().toString().padStart(2, "0") +
+					"Z"
+				);
+			}
+			if (document.getElementById("opt-in-alt").checked)
+				label.push(Math.floor(data.altitude / 100).toString().padStart(3, "0"));
+			if (document.getElementById("opt-in-spd").checked)
+				label.push("G" + Math.floor(data.speed).toString().padStart(3, "0"));
+			if (document.getElementById("opt-in-hdg").checked)
+				label.push("H" + Math.floor(data.heading).toString().padStart(3, "0"));
+
+			return pos + (label.length ? `(${label.join(" ")})` : "");
 		})
-		.map((i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[i])
 		.join("");
 
 	resJson.value = JSON.stringify({
